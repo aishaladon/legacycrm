@@ -10,19 +10,20 @@ Deployed as a Node app on Hostinger (Standard plan) at `crm.aishaladon.com`.
 Credentials (Supabase service-role key, WordPress application password,
 eventually a WhatsApp API key) live server-side only — never in the browser.
 
-## Status: Phase 1 — Repo + schema
+## Status: Phase 2 — Integration modules
 
-- [x] Next.js + TypeScript + Tailwind app scaffolded
-- [x] Supabase schema migrated (`contacts`, `interactions`, `pipeline`,
-      `projects_tasks`, `payments`, `campaigns` + `campaign_sends`) to
-      project `legacy-crm` (`aherxqnaufiaotspzrbn`), with RLS enabled on
-      every table
-- [x] Generated TypeScript types from the live schema
-      (`src/lib/types/database.ts`)
-- [x] Supabase client libs (`src/lib/supabase/{client,server}.ts`) + `/`
-      dashboard shell that confirms the DB connection by reading table counts
-- [ ] Phase 2 — Gmail / Calendar / Meet transcripts / WordPress integration
-      modules
+- [x] **Phase 1** — Next.js app scaffolded; Supabase schema migrated
+      (`contacts`, `interactions`, `pipeline`, `projects_tasks`, `payments`,
+      `campaigns` + `campaign_sends`) to project `legacy-crm`
+      (`aherxqnaufiaotspzrbn`), RLS enabled everywhere, generated types,
+      Supabase clients, `/` dashboard shell
+- [x] **Phase 2** — sync modules pulling Gmail threads, Calendar events,
+      Meet transcripts, WooCommerce orders, and LearnDash enrollments into
+      the database (`src/lib/integrations/`), exposed as protected
+      `/api/sync/*` routes (`src/app/api/sync/`) — see
+      [Integrations](#integrations) below. **Not yet live**: needs Google
+      OAuth credentials and the WordPress application password set as env
+      vars before it can run against real data.
 - [ ] Phase 3 — Stripe/PayPal (via Windsor.ai) + Novo CSV import
 - [ ] Phase 4 — Bitly attribution wiring
 - [ ] Phase 5 — Automation chain (contact creation → WhatsApp welcome) +
@@ -51,7 +52,46 @@ Pipeline `stage` is validated per income stream via a check constraint:
 | Course | Registered → Enrolled → Completed |
 | Book | Purchased |
 
-Migration source: `supabase/migrations/0001_init_schema.sql`.
+Migration source: `supabase/migrations/0001_init_schema.sql`,
+`0002_add_pipeline_external_ref.sql` (adds `pipeline.external_ref` so a
+transaction-log row, like a book purchase, can dedupe against repeat syncs
+by the source system's own id).
+
+## Integrations
+
+Every integration resolves the other party to a `contacts` row by email
+(`src/lib/crm/contacts.ts`) before writing — one contact record stays the
+hub no matter which source touched it first.
+
+| Source | Module | Writes to | Notes |
+| --- | --- | --- | --- |
+| Gmail | `src/lib/integrations/google/gmail.ts` | `interactions` (type `email`) | Excludes Promotions/Social; deduped on Gmail thread id |
+| Google Calendar | `.../google/calendar.ts` | `interactions` (type `meeting`) | Logs every non-self attendee; one row per attendee |
+| Google Meet transcripts | `.../google/drive.ts` | `interactions.transcript` | Matches a Meet event to the transcript Doc Drive saves afterward by time proximity, then enriches the same interaction row Calendar sync creates — best-effort, tighten once real transcripts exist |
+| WooCommerce orders | `.../wordpress/woocommerce.ts` | `pipeline` (book stream, `Purchased`) | One row per paid order — a transaction log, not a funnel, per the build plan; deduped on WooCommerce order id |
+| LearnDash enrollments | `.../wordpress/learndash.ts` | `pipeline` (course stream) | Confirmed against the live site's `ldlms/v2` namespace: no bulk "enrolled users" endpoint exists, so this pages through WordPress users and checks each one's course-progress — see the code comment for the scale caveat |
+
+Each has a protected route under `src/app/api/sync/<source>/route.ts`
+(`POST`, requires `Authorization: Bearer <SYNC_SECRET>`), plus
+`/api/sync/all` to run every source in one call. These are meant to be
+called manually for now or wired to a scheduled job later — Phase 5 is
+where the automation chain (webhook/polling triggers) gets built.
+
+**Before this can run against real data:**
+
+1. **WordPress application password** — generate in wp-admin (Users >
+   Profile > Application Passwords) for an admin account, set
+   `WORDPRESS_APP_USERNAME` / `WORDPRESS_APP_PASSWORD`.
+2. **Google OAuth credentials** — see
+   [`docs/google-oauth-setup.md`](docs/google-oauth-setup.md) for the
+   step-by-step (no coding required, ~10 minutes).
+3. **`SYNC_SECRET`** — any random string (`openssl rand -hex 32`), matched
+   between the deployed env and whatever calls `/api/sync/*`.
+
+The "Get in touch" Google Form/Sheet mentioned in the build plan wasn't
+found under aishaladon@gmail.com's Drive during setup — worth confirming
+its owner/location before Phase 5 (it's being replaced by a native form
+there anyway, so it only matters for the historical import).
 
 ## Local development
 

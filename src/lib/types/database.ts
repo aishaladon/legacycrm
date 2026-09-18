@@ -232,6 +232,7 @@ export type Database = {
           contact_id: string
           created_at: string
           expected_date: string | null
+          external_ref: string | null
           id: string
           income_stream: Database["public"]["Enums"]["income_stream"]
           stage: string
@@ -243,6 +244,7 @@ export type Database = {
           contact_id: string
           created_at?: string
           expected_date?: string | null
+          external_ref?: string | null
           id?: string
           income_stream: Database["public"]["Enums"]["income_stream"]
           stage: string
@@ -254,6 +256,7 @@ export type Database = {
           contact_id?: string
           created_at?: string
           expected_date?: string | null
+          external_ref?: string | null
           id?: string
           income_stream?: Database["public"]["Enums"]["income_stream"]
           stage?: string
