@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireSyncSecret } from "@/lib/sync/auth";
+import { errorMessage } from "@/lib/sync/errorMessage";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { syncGmailInteractions } from "@/lib/integrations/google/gmail";
 
@@ -18,7 +19,7 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Gmail sync failed" },
+      { error: errorMessage(err) },
       { status: 500 },
     );
   }

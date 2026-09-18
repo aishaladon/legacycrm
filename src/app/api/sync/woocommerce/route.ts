@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { requireSyncSecret } from "@/lib/sync/auth";
+import { errorMessage } from "@/lib/sync/errorMessage";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { syncWooCommerceOrders } from "@/lib/integrations/wordpress/woocommerce";
 
@@ -13,7 +14,7 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "WooCommerce sync failed" },
+      { error: errorMessage(err) },
       { status: 500 },
     );
   }
