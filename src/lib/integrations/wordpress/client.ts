@@ -31,7 +31,10 @@ export function getWordPressClient() {
     });
 
     if (!res.ok) {
-      throw new Error(`WordPress REST request failed: GET ${url.pathname} → ${res.status} ${res.statusText}`);
+      const body = await res.text().catch(() => "");
+      throw new Error(
+        `WordPress REST request failed: GET ${url.pathname} → ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 500)}` : ""}`,
+      );
     }
 
     return res.json() as Promise<T>;
