@@ -185,7 +185,7 @@ export type Database = {
       payments: {
         Row: {
           amount: number
-          contact_id: string
+          contact_id: string | null
           created_at: string
           currency: string
           external_id: string | null
@@ -196,7 +196,7 @@ export type Database = {
         }
         Insert: {
           amount: number
-          contact_id: string
+          contact_id?: string | null
           created_at?: string
           currency?: string
           external_id?: string | null
@@ -207,7 +207,7 @@ export type Database = {
         }
         Update: {
           amount?: number
-          contact_id?: string
+          contact_id?: string | null
           created_at?: string
           currency?: string
           external_id?: string | null

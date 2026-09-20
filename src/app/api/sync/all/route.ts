@@ -8,6 +8,7 @@ import { syncCalendarInteractions } from "@/lib/integrations/google/calendar";
 import { syncMeetTranscripts } from "@/lib/integrations/google/drive";
 import { syncWooCommerceOrders } from "@/lib/integrations/wordpress/woocommerce";
 import { syncLearnDashEnrollments } from "@/lib/integrations/wordpress/learndash";
+import { syncStripePayments, syncPayPalPayments } from "@/lib/integrations/windsor/payments";
 
 /**
  * Runs every Phase 2 sync in sequence and reports per-source results,
@@ -36,6 +37,8 @@ export async function POST(request: Request) {
     },
     woocommerce: () => syncWooCommerceOrders(supabase, {}),
     learndash: () => syncLearnDashEnrollments(supabase, {}),
+    stripe: () => syncStripePayments(supabase),
+    paypal: () => syncPayPalPayments(supabase),
   };
 
   const results: Record<string, { ok: true; data: unknown } | { ok: false; error: string }> = {};

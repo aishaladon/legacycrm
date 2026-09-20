@@ -10,7 +10,7 @@ Deployed as a Node app on Hostinger (Standard plan) at `crm.aishaladon.com`.
 Credentials (Supabase service-role key, WordPress application password,
 eventually a WhatsApp API key) live server-side only — never in the browser.
 
-## Status: Phase 2 — Integration modules
+## Status: Phase 3 — Payments
 
 - [x] **Phase 1** — Next.js app scaffolded; Supabase schema migrated
       (`contacts`, `interactions`, `pipeline`, `projects_tasks`, `payments`,
@@ -21,14 +21,41 @@ eventually a WhatsApp API key) live server-side only — never in the browser.
       Meet transcripts, WooCommerce orders, and LearnDash enrollments into
       the database (`src/lib/integrations/`), exposed as protected
       `/api/sync/*` routes (`src/app/api/sync/`) — see
-      [Integrations](#integrations) below. **Not yet live**: needs Google
-      OAuth credentials and the WordPress application password set as env
-      vars before it can run against real data.
-- [ ] Phase 3 — Stripe/PayPal (via Windsor.ai) + Novo CSV import
+      [Integrations](#integrations) below. **Confirmed live** on
+      `crm.aishaladon.com`.
+- [x] **Phase 3** — Stripe/PayPal payments sync via Windsor.ai
+      (`src/lib/integrations/windsor/`) and a Novo CSV importer
+      (`src/lib/import/novo.ts`, upload UI at `/import/novo`). PayPal
+      verified against real transaction data; Stripe isn't in use yet
+      (empty account, schema-verified only) — will start working
+      automatically once real transactions exist. Novo's column-detection
+      logic isn't yet verified against a real export.
 - [ ] Phase 4 — Bitly attribution wiring
 - [ ] Phase 5 — Automation chain (contact creation → WhatsApp welcome) +
       native "Get in touch" form + one-time Airtable import
 - [ ] Phase 6 — Dashboard reports/segments
+
+## Deployment
+
+Live at `crm.aishaladon.com`, hosted on Hostinger (Standard plan, Node.js
+App feature). Two things this host required that a typical Next.js
+deploy doesn't:
+
+- **`next.config.js`, not `.ts`** — the host's glibc predates what
+  Next.js 16's native config-compiler binary needs, so a `.ts` config
+  (which gets compiled through that binary) fails to load. A plain JS
+  config needs no compile step.
+- **`next build --webpack`** (see `package.json` scripts) — Turbopack,
+  Next 16's default bundler, also needs a native binary this host can't
+  load; Next's own docs confirm WASM fallback doesn't support Turbopack.
+  Webpack does the same job without a native dependency.
+- **Tailwind v3, not v4** — v4's Rust engine (`@tailwindcss/oxide`,
+  `lightningcss`) hit the identical native-binary problem during CSS
+  processing. Downgraded to v3 (pure JS/PostCSS) to remove that whole
+  class of failure rather than patching around it.
+
+If redeploying on different hosting without this glibc constraint, all
+three are safe to revert, but there's no real reason to.
 
 ## Schema
 
@@ -40,7 +67,7 @@ Six tables, one contact record linking everything:
 | `interactions` | Every email/call/meeting/WhatsApp touch, transcripts | → `contacts` |
 | `pipeline` | One row per income-stream engagement + stage | → `contacts` |
 | `projects_tasks` | Notion replacement: projects, tasks, status, notes | → `contacts` (optional) |
-| `payments` | Stripe/PayPal/Novo transactions | → `contacts` |
+| `payments` | Stripe/PayPal/Novo transactions | → `contacts` (nullable — Novo bank rows land unattributed until matched) |
 | `campaigns` / `campaign_sends` | WhatsApp templates and sends, plus the post/platform that drove each contact in | → `contacts` |
 
 Pipeline `stage` is validated per income stream via a check constraint:
@@ -55,7 +82,8 @@ Pipeline `stage` is validated per income stream via a check constraint:
 Migration source: `supabase/migrations/0001_init_schema.sql`,
 `0002_add_pipeline_external_ref.sql` (adds `pipeline.external_ref` so a
 transaction-log row, like a book purchase, can dedupe against repeat syncs
-by the source system's own id).
+by the source system's own id), `0003_payments_contact_id_nullable.sql`
+(Novo bank rows have no email to resolve to a contact at import time).
 
 ## Integrations
 
@@ -70,6 +98,9 @@ hub no matter which source touched it first.
 | Google Meet transcripts | `.../google/drive.ts` | `interactions.transcript` | Matches a Meet event to the transcript Doc Drive saves afterward by time proximity, then enriches the same interaction row Calendar sync creates — best-effort, tighten once real transcripts exist |
 | WooCommerce orders | `.../wordpress/woocommerce.ts` | `pipeline` (book stream, `Purchased`) | One row per paid order — a transaction log, not a funnel, per the build plan; deduped on WooCommerce order id |
 | LearnDash enrollments | `.../wordpress/learndash.ts` | `pipeline` (course stream) | Confirmed against the live site's `ldlms/v2` namespace: no bulk "enrolled users" endpoint exists, so this pages through WordPress users and checks each one's course-progress — see the code comment for the scale caveat |
+| Stripe (via Windsor.ai) | `.../windsor/payments.ts` | `payments` (source `stripe`) | Schema-verified only — the connected account has no transactions yet. Filters to `status === "succeeded"` |
+| PayPal (via Windsor.ai) | `.../windsor/payments.ts` | `payments` (source `paypal`) | Verified against real data. PayPal's Transaction Search API returns every ledger event (withdrawals, fees, outgoing purchases too) — filtered to `amount > 0 AND payer email present` to isolate real incoming customer payments |
+| Novo (manual CSV) | `src/lib/import/novo.ts` | `payments` (source `novo`, `contact_id: null`) | Upload at `/import/novo`. Only imports deposits (`amount > 0`); deduped on a hash of (date, description, amount) since bank exports have no stable transaction id. **Column-detection heuristics aren't verified against a real Novo export yet** |
 
 Each has a protected route under `src/app/api/sync/<source>/route.ts`
 (`POST`, requires `Authorization: Bearer <SYNC_SECRET>`), plus
@@ -86,7 +117,14 @@ where the automation chain (webhook/polling triggers) gets built.
    [`docs/google-oauth-setup.md`](docs/google-oauth-setup.md) for the
    step-by-step (no coding required, ~10 minutes).
 3. **`SYNC_SECRET`** — any random string (`openssl rand -hex 32`), matched
-   between the deployed env and whatever calls `/api/sync/*`.
+   between the deployed env and whatever calls `/api/sync/*` and
+   `/api/import/*`.
+4. **Windsor.ai** — connect Stripe and PayPal (slug `paypal_transaction`)
+   once each at `https://onboard.windsor.ai/connect?connector=<slug>`,
+   entering real API credentials directly on Windsor's form, never in
+   chat or this repo. Then set `WINDSOR_API_KEY` from your Windsor.ai
+   account settings — this is the deployed app's own key, separate from
+   any claude.ai connector.
 
 The "Get in touch" Google Form/Sheet mentioned in the build plan wasn't
 found under aishaladon@gmail.com's Drive during setup — worth confirming
