@@ -9,24 +9,25 @@ import { parseCsv } from "./csv";
 type Supabase = SupabaseClient<Database>;
 
 /**
- * Column headers this looks for, case-insensitively. Not yet verified
- * against a real Novo export (staying manual per the build plan, so no
- * live account to pull a sample from) — these match the shape of every
- * common business-bank CSV export (Date/Description/Amount, or separate
- * Debit/Credit columns). If a real Novo file uses different headers,
- * adjust the patterns below rather than the parsing logic itself.
+ * Column headers this looks for, case-insensitively. Verified against a
+ * real Novo "Activities" export: Date, Description, Amount, Note,
+ * Check Number, Category. Category is what makes filtering reliable —
+ * Novo tags real incoming client money as "Revenue" and everything else
+ * (refunds, fee reimbursements, owner transfers, payroll deposits) with
+ * other categories, which a bare amount > 0 check can't tell apart.
  */
 const DATE_HEADER = /date/i;
 const DESCRIPTION_HEADER = /description|memo|payee|merchant/i;
 const AMOUNT_HEADER = /^amount$/i;
 const CREDIT_HEADER = /credit|deposit/i;
 const DEBIT_HEADER = /debit|withdrawal/i;
+const CATEGORY_HEADER = /^category$/i;
 
 function findColumn(headers: string[], pattern: RegExp): number {
   return headers.findIndex((h) => pattern.test(h.trim()));
 }
 
-export type NovoRow = { date: string; description: string; amount: number };
+export type NovoRow = { date: string; description: string; amount: number; category: string | null };
 
 export function parseNovoCsv(csvText: string): NovoRow[] {
   const rows = parseCsv(csvText);
@@ -38,6 +39,7 @@ export function parseNovoCsv(csvText: string): NovoRow[] {
   const amountCol = findColumn(headers, AMOUNT_HEADER);
   const creditCol = findColumn(headers, CREDIT_HEADER);
   const debitCol = findColumn(headers, DEBIT_HEADER);
+  const categoryCol = findColumn(headers, CATEGORY_HEADER);
 
   if (dateCol === -1) {
     throw new Error(
@@ -70,6 +72,7 @@ export function parseNovoCsv(csvText: string): NovoRow[] {
       date,
       description: descCol !== -1 ? (row[descCol]?.trim() ?? "") : "",
       amount,
+      category: categoryCol !== -1 ? (row[categoryCol]?.trim() ?? "") : null,
     });
   }
 
@@ -79,8 +82,20 @@ export function parseNovoCsv(csvText: string): NovoRow[] {
 export type NovoImportResult = { rowsChecked: number; paymentsUpserted: number };
 
 /**
- * Only imports money IN (positive amounts) — Novo's export includes every
- * business expense too, which isn't what the `payments` table tracks.
+ * Only imports rows Novo itself categorizes as "Revenue" (falls back to
+ * any positive amount if a file has no Category column at all — better
+ * than importing nothing, though less precise). A bare amount > 0 check
+ * isn't enough: real Novo exports include refunds, fee reimbursements,
+ * payroll deposits and owner transfers that are all positive but aren't
+ * client payments.
+ *
+ * Also skips anything with "paypal" in the description — money PayPal
+ * transfers into Novo was already recorded once by the PayPal sync
+ * (source "paypal"); importing the Novo-side deposit too would double
+ * the revenue for the same payment. Confirmed against a real export:
+ * every "PAYPAL TRANSFER" row's amount matched a real PayPal withdrawal
+ * exactly.
+ *
  * Deduped on a hash of (date, description, amount), since bank exports
  * don't carry a stable external transaction id — re-importing the same
  * month's file twice won't create duplicates.
@@ -94,6 +109,8 @@ export async function importNovoPayments(
 
   for (const row of rows) {
     if (!(row.amount > 0)) continue;
+    if (row.category !== null && row.category.toLowerCase() !== "revenue") continue;
+    if (row.description.toLowerCase().includes("paypal")) continue;
 
     const paidAt = new Date(row.date);
     if (Number.isNaN(paidAt.getTime())) continue;
