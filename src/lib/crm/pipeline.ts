@@ -23,6 +23,15 @@ const FINAL_STAGE: Partial<Record<IncomeStream, string>> = {
  * contact's progress through a funnel (LearnDash course enrollment,
  * Calendar consultation bookings, etc.) rather than logging a one-off
  * transaction.
+ *
+ * Same check-then-insert shape as findOrCreateContactByEmail /
+ * upsertInteractionBySourceRef, without a matching unique constraint —
+ * reviewed and left as-is for now, since "one open row" isn't a simple
+ * key (it depends on stage, which varies per income stream) and, unlike
+ * contacts/interactions, only one integration (LearnDash) calls this
+ * today, so there's no real concurrent-write path yet. Revisit with a
+ * proper constraint before a second source starts writing to the same
+ * stream (e.g. Phase 5's consultation-booking → pipeline wiring).
  */
 export async function findOrCreateOpenPipelineRow(
   supabase: Supabase,

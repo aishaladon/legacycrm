@@ -20,6 +20,14 @@ export type ContactSeed = {
  * `contacts` row by email rather than creating parallel records per source.
  * Lead source is only set on first creation — a later sync never overwrites
  * an already-attributed contact's lead source.
+ *
+ * The check-then-insert below isn't atomic, so two syncs racing to create
+ * the same new contact at once (e.g. Gmail and Calendar sync both hitting
+ * a brand-new client's email around the same time) could both pass the
+ * "does this exist" check before either inserts. `contacts.email` has a
+ * unique constraint (migration 0005) as the real guarantee; if the insert
+ * loses that race, fall back to fetching the row the other call just
+ * created instead of failing.
  */
 export async function findOrCreateContactByEmail(
   supabase: Supabase,
@@ -48,6 +56,17 @@ export async function findOrCreateContactByEmail(
     .select("*")
     .single();
 
-  if (insertError) throw insertError;
+  if (insertError) {
+    if (insertError.code === "23505") {
+      const { data: winner, error: refetchError } = await supabase
+        .from("contacts")
+        .select("*")
+        .eq("email", email)
+        .single();
+      if (refetchError) throw refetchError;
+      return winner;
+    }
+    throw insertError;
+  }
   return created;
 }
