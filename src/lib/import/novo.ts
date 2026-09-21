@@ -89,12 +89,17 @@ export type NovoImportResult = { rowsChecked: number; paymentsUpserted: number }
  * payroll deposits and owner transfers that are all positive but aren't
  * client payments.
  *
- * Also skips anything with "paypal" in the description — money PayPal
- * transfers into Novo was already recorded once by the PayPal sync
- * (source "paypal"); importing the Novo-side deposit too would double
- * the revenue for the same payment. Confirmed against a real export:
- * every "PAYPAL TRANSFER" row's amount matched a real PayPal withdrawal
- * exactly.
+ * Also skips anything with "paypal" or "stripe" in the description —
+ * money either processor sends to Novo was already recorded once by
+ * that processor's own sync (source "paypal" or "stripe"); importing
+ * the Novo-side deposit too would double the revenue for the same
+ * payment. Confirmed against a real export for PayPal: every
+ * "PAYPAL TRANSFER" row's amount matched a real PayPal withdrawal
+ * exactly. Stripe payouts to a bank account are typically a batched sum
+ * covering multiple charges (not a 1:1 match to any single charge), but
+ * the same double-counting risk applies, so the same exclusion is
+ * applied proactively — not yet confirmed against a real Stripe payout
+ * line in a Novo export, since one hasn't appeared yet.
  *
  * Deduped on a hash of (date, description, amount), since bank exports
  * don't carry a stable external transaction id — re-importing the same
@@ -110,7 +115,7 @@ export async function importNovoPayments(
   for (const row of rows) {
     if (!(row.amount > 0)) continue;
     if (row.category !== null && row.category.toLowerCase() !== "revenue") continue;
-    if (row.description.toLowerCase().includes("paypal")) continue;
+    if (/paypal|stripe/i.test(row.description)) continue;
 
     const paidAt = new Date(row.date);
     if (Number.isNaN(paidAt.getTime())) continue;
