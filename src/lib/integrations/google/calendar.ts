@@ -7,6 +7,7 @@ import type { Database } from "@/lib/types/database";
 import { findOrCreateContactByEmail } from "@/lib/crm/contacts";
 import { upsertInteractionBySourceRef } from "@/lib/crm/interactions";
 import { getGoogleAuthClient } from "./auth";
+import { isLikelyAutomatedSender } from "./contactFilters";
 
 type Supabase = SupabaseClient<Database>;
 
@@ -14,18 +15,35 @@ export type CalendarSyncResult = { eventsProcessed: number; interactionsUpserted
 
 /**
  * Syncs Calendar events (consultation bookings, client meetings) into
- * `interactions`, logged against every non-self attendee. Consultation
- * booking → pipeline stage changes and the WhatsApp welcome trigger are
- * the automation chain (Phase 5) — this just logs the meeting itself.
+ * `interactions`, logged against every non-self, non-bot attendee.
+ * Consultation booking → pipeline stage changes and the WhatsApp welcome
+ * trigger are the automation chain (Phase 5) — this just logs the
+ * meeting itself.
+ *
+ * ownEmailAliases matters here too, not just ownEmail: real production
+ * data showed one of Aisha's own other addresses (emailme@aishaladon.com)
+ * got synced as if it were a separate contact, because it was excluded
+ * from Gmail's filter but not Calendar's — each sync needs the same full
+ * list of "this is actually me" addresses.
  */
 export async function syncCalendarInteractions(
   supabase: Supabase,
-  opts: { sinceDays?: number; aheadDays?: number; ownEmail: string; maxEvents?: number },
+  opts: {
+    sinceDays?: number;
+    aheadDays?: number;
+    ownEmail: string;
+    maxEvents?: number;
+    ownEmailAliases?: string[];
+  },
 ): Promise<CalendarSyncResult> {
   const sinceDays = opts.sinceDays ?? 30;
   const aheadDays = opts.aheadDays ?? 14;
   const auth = getGoogleAuthClient();
   const calendar = google.calendar({ version: "v3", auth });
+
+  const ownEmails = new Set(
+    [opts.ownEmail, ...(opts.ownEmailAliases ?? [])].map((e) => e.toLowerCase()),
+  );
 
   const timeMin = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
   const timeMax = new Date(Date.now() + aheadDays * 24 * 60 * 60 * 1000).toISOString();
@@ -46,7 +64,11 @@ export async function syncCalendarInteractions(
     if (!event.id || event.status === "cancelled") continue;
 
     const attendees = (event.attendees ?? []).filter(
-      (a) => a.email && a.email.toLowerCase() !== opts.ownEmail.toLowerCase() && !a.resource,
+      (a) =>
+        a.email &&
+        !ownEmails.has(a.email.toLowerCase()) &&
+        !a.resource &&
+        !isLikelyAutomatedSender(a.email),
     );
     if (attendees.length === 0) continue;
 

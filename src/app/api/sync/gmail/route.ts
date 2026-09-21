@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { requireSyncSecret } from "@/lib/sync/auth";
 import { errorMessage } from "@/lib/sync/errorMessage";
+import { getOwnEmailAliases } from "@/lib/sync/ownEmail";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { syncGmailInteractions } from "@/lib/integrations/google/gmail";
 
@@ -21,6 +22,7 @@ export async function POST(request: Request) {
   try {
     const result = await syncGmailInteractions(createServiceRoleClient(), {
       ownEmail,
+      ownEmailAliases: getOwnEmailAliases(),
       maxThreads,
       sinceDays,
     });

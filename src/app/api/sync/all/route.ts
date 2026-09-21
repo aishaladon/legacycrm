@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { requireSyncSecret } from "@/lib/sync/auth";
 import { errorMessage } from "@/lib/sync/errorMessage";
+import { getOwnEmailAliases } from "@/lib/sync/ownEmail";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { syncGmailInteractions } from "@/lib/integrations/google/gmail";
 import { syncCalendarInteractions } from "@/lib/integrations/google/calendar";
@@ -32,16 +33,17 @@ export async function POST(request: Request) {
   if (unauthorized) return unauthorized;
 
   const ownEmail = process.env.OWNER_EMAIL;
+  const ownEmailAliases = getOwnEmailAliases();
   const supabase = createServiceRoleClient();
 
   const sources: Record<string, () => Promise<unknown>> = {
     gmail: () => {
       if (!ownEmail) throw new Error("OWNER_EMAIL is not configured.");
-      return syncGmailInteractions(supabase, { ownEmail });
+      return syncGmailInteractions(supabase, { ownEmail, ownEmailAliases });
     },
     calendar: () => {
       if (!ownEmail) throw new Error("OWNER_EMAIL is not configured.");
-      return syncCalendarInteractions(supabase, { ownEmail });
+      return syncCalendarInteractions(supabase, { ownEmail, ownEmailAliases });
     },
     meet: () => {
       if (!ownEmail) throw new Error("OWNER_EMAIL is not configured.");

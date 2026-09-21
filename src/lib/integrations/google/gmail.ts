@@ -7,6 +7,7 @@ import type { Database } from "@/lib/types/database";
 import { findOrCreateContactByEmail } from "@/lib/crm/contacts";
 import { upsertInteractionBySourceRef } from "@/lib/crm/interactions";
 import { getGoogleAuthClient } from "./auth";
+import { isLikelyAutomatedSender } from "./contactFilters";
 
 type Supabase = SupabaseClient<Database>;
 
@@ -73,24 +74,30 @@ export type GmailSyncResult = { threadsProcessed: number; interactionsUpserted: 
 
 /**
  * Syncs recent Gmail threads into `interactions`, resolving the other
- * party's email into a `contacts` row. Excludes Promotions/Social so
- * newsletters and notifications don't pollute the conversation log.
+ * party's email into a `contacts` row. Excludes Promotions/Social/Updates
+ * — Gmail's own classifier already sorts most automated notifications
+ * into Updates, so this is the cheapest, most reliable filter available
+ * before the defensive isLikelyAutomatedSender check below runs.
  */
 export async function syncGmailInteractions(
   supabase: Supabase,
-  opts: { sinceDays?: number; ownEmail: string; maxThreads?: number },
+  opts: { sinceDays?: number; ownEmail: string; maxThreads?: number; ownEmailAliases?: string[] },
 ): Promise<GmailSyncResult> {
   const sinceDays = opts.sinceDays ?? 30;
   const maxThreads = opts.maxThreads ?? 100;
   const auth = getGoogleAuthClient();
   const gmail = google.gmail({ version: "v1", auth });
 
+  const ownEmails = new Set(
+    [opts.ownEmail, ...(opts.ownEmailAliases ?? [])].map((e) => e.toLowerCase()),
+  );
+
   const afterDate = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
   const afterStr = `${afterDate.getFullYear()}/${afterDate.getMonth() + 1}/${afterDate.getDate()}`;
 
   const list = await gmail.users.threads.list({
     userId: "me",
-    q: `-category:promotions -category:social after:${afterStr}`,
+    q: `-category:promotions -category:social -category:updates after:${afterStr}`,
     maxResults: maxThreads,
   });
 
@@ -116,14 +123,13 @@ export async function syncGmailInteractions(
 
     const fromHeader = getHeader(headers, "From");
     const from = fromHeader ? parseAddress(fromHeader) : null;
-    const ownEmail = opts.ownEmail.toLowerCase();
     const other =
-      from?.email === ownEmail
+      from && ownEmails.has(from.email)
         ? [...parseAddressList(getHeader(headers, "To")), ...parseAddressList(getHeader(headers, "Cc"))].find(
-            (a) => a.email !== ownEmail,
+            (a) => !ownEmails.has(a.email),
           )
         : from;
-    if (!other) continue;
+    if (!other || ownEmails.has(other.email) || isLikelyAutomatedSender(other.email)) continue;
 
     const contact = await findOrCreateContactByEmail(supabase, {
       email: other.email,
