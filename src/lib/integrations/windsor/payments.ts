@@ -17,16 +17,29 @@ type StripeTransactionRow = {
   transaction__created: string;
   transaction__status: string;
   transaction__description?: string | null;
+  reporting_category?: string | null;
 };
 
 export type StripeSyncResult = { transactionsChecked: number; paymentsUpserted: number };
 
 /**
- * Verified against Windsor.ai's stripe connector schema. Not yet verified
- * against a real transaction (the connected account had none at build
- * time) — the field names are confirmed correct via get_fields, but
- * amount's unit (dollars vs cents) couldn't be confirmed against real
- * data. Recheck this once real Stripe transactions exist.
+ * Verified against a real $50 charge. Two things confirmed wrong by that
+ * real data, both fixed here:
+ *
+ * 1. This connector's "transaction" table is Stripe's Balance
+ *    Transactions, not Charges/PaymentIntents — `status` here means
+ *    "available" vs "pending" (whether funds have settled), never
+ *    "succeeded". Filtering on status === "succeeded" could never match
+ *    anything. Now filters on `reporting_category === "charge"` instead,
+ *    which correctly identifies real incoming charges (as opposed to
+ *    refunds, payouts, fees) regardless of settlement state.
+ * 2. Not every charge carries a resolvable email (confirmed null on a
+ *    real charge with no linked customer/invoice object) — a payment
+ *    isn't dropped just because it can't be attributed to a contact yet.
+ *    `payments.contact_id` is nullable for exactly this (see migration
+ *    0003) — same fallback Novo imports already use.
+ *
+ * Amount confirmed to already be in whole dollars, not cents.
  */
 export async function syncStripePayments(
   supabase: Supabase,
@@ -44,6 +57,7 @@ export async function syncStripePayments(
       "transaction__created",
       "transaction__status",
       "transaction__description",
+      "reporting_category",
     ],
     datePreset: opts.datePreset ?? "last_2years",
   });
@@ -51,13 +65,15 @@ export async function syncStripePayments(
   let paymentsUpserted = 0;
 
   for (const row of rows) {
-    if (row.transaction__status !== "succeeded" || !row.transaction__email) continue;
+    if (row.reporting_category !== "charge") continue;
     if (!(row.transaction__amount > 0)) continue;
 
-    const contact = await findOrCreateContactByEmail(supabase, { email: row.transaction__email });
+    const contactId = row.transaction__email
+      ? (await findOrCreateContactByEmail(supabase, { email: row.transaction__email })).id
+      : null;
 
     await upsertPayment(supabase, {
-      contact_id: contact.id,
+      contact_id: contactId,
       amount: row.transaction__amount,
       currency: row.transaction__currency?.toUpperCase() ?? "USD",
       product_service: row.transaction__description ?? null,
