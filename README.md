@@ -91,6 +91,13 @@ Every integration resolves the other party to a `contacts` row by email
 (`src/lib/crm/contacts.ts`) before writing — one contact record stays the
 hub no matter which source touched it first.
 
+**All credentials/connections below are set up and confirmed correct**
+(Gmail, Calendar, WordPress, Windsor.ai/Stripe/PayPal, Hostinger). When
+something doesn't work, the default assumption should be a bug in this
+code, not a missing/misconfigured connection — every real issue found so
+far (the Stripe status-field bug, the Novo double-counting risk, the
+contacts/interactions race condition) turned out to be exactly that.
+
 | Source | Module | Writes to | Notes |
 | --- | --- | --- | --- |
 | Gmail | `src/lib/integrations/google/gmail.ts` | `interactions` (type `email`) | Excludes Promotions/Social; deduped on Gmail thread id |
