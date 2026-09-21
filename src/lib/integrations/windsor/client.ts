@@ -38,11 +38,11 @@ export function getWindsorClient() {
       );
     }
 
-    const json = (await res.json()) as { result?: T[]; error?: string };
+    const json = (await res.json()) as { data?: T[]; error?: string };
     if (json.error) {
       throw new Error(`Windsor.ai error for /${params.connector}: ${json.error}`);
     }
-    return json.result ?? [];
+    return json.data ?? [];
   }
 
   return { getData };
