@@ -10,13 +10,59 @@ import { getGoogleAuthClient } from "./auth";
 
 type Supabase = SupabaseClient<Database>;
 
-function parseAddress(headerValue: string | undefined) {
-  if (!headerValue) return null;
-  // "Jane Doe <jane@example.com>" or bare "jane@example.com"
-  const match = headerValue.match(/^(?:"?([^"<]*)"?\s*)?<?([^<>\s]+@[^<>\s]+)>?$/);
-  if (!match) return null;
-  const [, name, email] = match;
-  return { name: name?.trim() || undefined, email: email.toLowerCase() };
+/**
+ * Handles "Jane Doe <jane@example.com>" and bare "jane@example.com" as two
+ * separate patterns rather than one regex with an optional bracket — a
+ * single combined pattern lets the greedy display-name group backtrack
+ * into a bare address with no brackets to anchor against (confirmed by
+ * testing: "aishaladon@gmail.com" alone parsed as email "n@gmail.com",
+ * silently corrupting every thread where a header had no display name).
+ */
+function parseAddress(headerValue: string) {
+  const trimmed = headerValue.trim();
+
+  const bracketed = trimmed.match(/^(?:"?([^"<]*)"?\s*)?<([^<>\s]+@[^<>\s]+)>$/);
+  if (bracketed) {
+    const [, name, email] = bracketed;
+    return { name: name?.trim() || undefined, email: email.toLowerCase() };
+  }
+
+  const bare = trimmed.match(/^([^<>\s]+@[^<>\s]+)$/);
+  if (bare) return { name: undefined, email: bare[1].toLowerCase() };
+
+  return null;
+}
+
+/**
+ * Splits a header like `To`/`Cc` into individual addresses, respecting
+ * commas inside a quoted display name (`"Doe, Jane" <jane@x.com>, b@y.com`).
+ * Needed because a real "To" header is very often more than one recipient
+ * (CC'd colleague, a group send) — the original single-address regex
+ * would just fail to match the whole header and silently drop the
+ * interaction entirely, even though a real reply-worthy thread existed.
+ */
+function splitAddressList(headerValue: string): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (const char of headerValue) {
+    if (char === '"') inQuotes = !inQuotes;
+    if (char === "," && !inQuotes) {
+      parts.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function parseAddressList(headerValue: string | undefined) {
+  if (!headerValue) return [];
+  return splitAddressList(headerValue)
+    .map(parseAddress)
+    .filter((a): a is NonNullable<ReturnType<typeof parseAddress>> => a !== null);
 }
 
 function getHeader(headers: { name?: string | null; value?: string | null }[] | undefined, name: string) {
@@ -58,7 +104,7 @@ export async function syncGmailInteractions(
       userId: "me",
       id: threadRef.id,
       format: "metadata",
-      metadataHeaders: ["From", "To", "Subject", "Date"],
+      metadataHeaders: ["From", "To", "Cc", "Subject", "Date"],
     });
 
     const messages = thread.data.messages ?? [];
@@ -68,9 +114,15 @@ export async function syncGmailInteractions(
     const lastMessage = messages[messages.length - 1];
     const headers = firstMessage.payload?.headers;
 
-    const from = parseAddress(getHeader(headers, "From"));
-    const to = parseAddress(getHeader(headers, "To"));
-    const other = from?.email === opts.ownEmail.toLowerCase() ? to : from;
+    const fromHeader = getHeader(headers, "From");
+    const from = fromHeader ? parseAddress(fromHeader) : null;
+    const ownEmail = opts.ownEmail.toLowerCase();
+    const other =
+      from?.email === ownEmail
+        ? [...parseAddressList(getHeader(headers, "To")), ...parseAddressList(getHeader(headers, "Cc"))].find(
+            (a) => a.email !== ownEmail,
+          )
+        : from;
     if (!other) continue;
 
     const contact = await findOrCreateContactByEmail(supabase, {
